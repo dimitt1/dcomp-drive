@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # Parâmetros obrigatórios (RF3, RF9)
     encryption_enabled: bool = Field(default=False, description="Habilita cifra AES-256-GCM no cliente")
     encryption_algorithm: str = Field(default="AES-256-GCM")
+    encryption_key: str | None = Field(
+        default=None,
+        validation_alias="ENCRYPTION_KEY",
+        description="Chave simétrica de 256 bits (64 hex chars) exclusiva do Cliente via variável de ambiente/.env",
+    )
     replication_factor: int = Field(default=3, ge=1, description="Nível de replicação padrão (N)")
 
     # Parâmetros recomendados e opcionais
