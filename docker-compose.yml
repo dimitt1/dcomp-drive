@@ -1,0 +1,74 @@
+version: '3.8'
+
+# Subindo com um controlador e 5 de armazenamento como no exemplo.
+
+services:
+  controller:
+    build: .
+    command: python controller/server.py
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+
+  storage1:
+    build: .
+    command: python storage_node/node.py
+    ports:
+      - "6001:6000"
+    environment:
+      - PORT=6000
+      - STORAGE_DIR=/data/disk1
+    volumes:
+      - storage_data_1:/data/disk1
+
+  storage2:
+    build: .
+    command: python storage_node/node.py
+    ports:
+      - "6002:6000"
+    environment:
+      - PORT=6000
+      - STORAGE_DIR=/data/disk2
+    volumes:
+      - storage_data_2:/data/disk2
+
+  storage3:
+    build: .
+    command: python storage_node/node.py
+    ports:
+      - "6003:6000"
+    environment:
+      - PORT=6000
+      - STORAGE_DIR=/data/disk3
+    volumes:
+      - storage_data_3:/data/disk3
+
+  storage4:
+    build: .
+    command: python storage_node/node.py
+    ports:
+      - "6004:6000"
+    environment:
+      - PORT=6000
+      - STORAGE_DIR=/data/disk4
+    volumes:
+      - storage_data_4:/data/disk4
+
+  storage5:
+    build: .
+    command: python storage_node/node.py
+    ports:
+      - "6005:6000"
+    environment:
+      - PORT=6000
+      - STORAGE_DIR=/data/disk5
+    volumes:
+      - storage_data_5:/data/disk5
+
+volumes:
+  storage_data_1:
+  storage_data_2:
+  storage_data_3:
+  storage_data_4:
+  storage_data_5:
