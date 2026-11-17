@@ -1,74 +1,133 @@
-version: '3.8'
-
-# Subindo com um controlador e 5 de armazenamento como no exemplo.
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dcomp-postgres
+    environment:
+      POSTGRES_USER: dcomp
+      POSTGRES_PASSWORD: dcomp
+      POSTGRES_DB: dcomp_drive
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dcomp -d dcomp_drive"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   controller:
     build: .
-    command: python controller/server.py
+    container_name: dcomp-controller
+    command: uvicorn src.controller.main:app --host 0.0.0.0 --port 8000
     ports:
-      - "5000:5000"
+      - "8000:8000"
     environment:
-      - PORT=5000
+      - DATABASE_URL=postgresql+asyncpg://dcomp:dcomp@postgres:5432/dcomp_drive
+      - CONFIG_PATH=/app/config.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
 
-  storage1:
+  node-1:
     build: .
-    command: python storage_node/node.py
+    container_name: dcomp-node-1
+    command: uvicorn src.storage_node.main:app --host 0.0.0.0 --port 8001
     ports:
-      - "6001:6000"
+      - "8001:8001"
     environment:
-      - PORT=6000
-      - STORAGE_DIR=/data/disk1
+      - NODE_ID=node-1
+      - MACHINE_ID=machine-1
+      - HOST_URL=http://node-1:8001
+      - CONTROLLER_URL=http://controller:8000
+      - DISK_MOUNTS=node-1:disk-a=/data/disk_a,node-1:disk-b=/data/disk_b
     volumes:
-      - storage_data_1:/data/disk1
+      - node1_disk_a:/data/disk_a
+      - node1_disk_b:/data/disk_b
+    depends_on:
+      - controller
 
-  storage2:
+  node-2:
     build: .
-    command: python storage_node/node.py
+    container_name: dcomp-node-2
+    command: uvicorn src.storage_node.main:app --host 0.0.0.0 --port 8002
     ports:
-      - "6002:6000"
+      - "8002:8002"
     environment:
-      - PORT=6000
-      - STORAGE_DIR=/data/disk2
+      - NODE_ID=node-2
+      - MACHINE_ID=machine-2
+      - HOST_URL=http://node-2:8002
+      - CONTROLLER_URL=http://controller:8000
+      - DISK_MOUNTS=node-2:disk-a=/data/disk_a,node-2:disk-b=/data/disk_b
     volumes:
-      - storage_data_2:/data/disk2
+      - node2_disk_a:/data/disk_a
+      - node2_disk_b:/data/disk_b
+    depends_on:
+      - controller
 
-  storage3:
+  node-3:
     build: .
-    command: python storage_node/node.py
+    container_name: dcomp-node-3
+    command: uvicorn src.storage_node.main:app --host 0.0.0.0 --port 8003
     ports:
-      - "6003:6000"
+      - "8003:8003"
     environment:
-      - PORT=6000
-      - STORAGE_DIR=/data/disk3
+      - NODE_ID=node-3
+      - MACHINE_ID=machine-3
+      - HOST_URL=http://node-3:8003
+      - CONTROLLER_URL=http://controller:8000
+      - DISK_MOUNTS=node-3:disk-a=/data/disk_a,node-3:disk-b=/data/disk_b
     volumes:
-      - storage_data_3:/data/disk3
+      - node3_disk_a:/data/disk_a
+      - node3_disk_b:/data/disk_b
+    depends_on:
+      - controller
 
-  storage4:
+  node-4:
     build: .
-    command: python storage_node/node.py
+    container_name: dcomp-node-4
+    command: uvicorn src.storage_node.main:app --host 0.0.0.0 --port 8004
     ports:
-      - "6004:6000"
+      - "8004:8004"
     environment:
-      - PORT=6000
-      - STORAGE_DIR=/data/disk4
+      - NODE_ID=node-4
+      - MACHINE_ID=machine-4
+      - HOST_URL=http://node-4:8004
+      - CONTROLLER_URL=http://controller:8000
+      - DISK_MOUNTS=node-4:disk-a=/data/disk_a,node-4:disk-b=/data/disk_b
     volumes:
-      - storage_data_4:/data/disk4
+      - node4_disk_a:/data/disk_a
+      - node4_disk_b:/data/disk_b
+    depends_on:
+      - controller
 
-  storage5:
+  node-5:
     build: .
-    command: python storage_node/node.py
+    container_name: dcomp-node-5
+    command: uvicorn src.storage_node.main:app --host 0.0.0.0 --port 8005
     ports:
-      - "6005:6000"
+      - "8005:8005"
     environment:
-      - PORT=6000
-      - STORAGE_DIR=/data/disk5
+      - NODE_ID=node-5
+      - MACHINE_ID=machine-5
+      - HOST_URL=http://node-5:8005
+      - CONTROLLER_URL=http://controller:8000
+      - DISK_MOUNTS=node-5:disk-a=/data/disk_a,node-5:disk-b=/data/disk_b
     volumes:
-      - storage_data_5:/data/disk5
+      - node5_disk_a:/data/disk_a
+      - node5_disk_b:/data/disk_b
+    depends_on:
+      - controller
 
 volumes:
-  storage_data_1:
-  storage_data_2:
-  storage_data_3:
-  storage_data_4:
-  storage_data_5:
+  postgres_data:
+  node1_disk_a:
+  node1_disk_b:
+  node2_disk_a:
+  node2_disk_b:
+  node3_disk_a:
+  node3_disk_b:
+  node4_disk_a:
+  node4_disk_b:
+  node5_disk_a:
+  node5_disk_b:

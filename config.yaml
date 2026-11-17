@@ -1,15 +1,24 @@
+encryption_enabled: false
+encryption_algorithm: "AES-256-GCM"
 replication_factor: 3
 
 chunk_size_mb: 4
-
-heartbeat_interval_sec: 5
-
-heartbeat_timeout_sec: 15
-
-disk_usage_limit_pct: 90.0
-
-encryption_enabled: false
-
+write_quorum: 2
+allow_under_replicated_writes: true
 hash_algorithm: "sha256"
 
-write_quorum: 2
+heartbeat_interval_sec: 5
+suspect_timeout_sec: 10
+heartbeat_timeout_sec: 15
+
+scrubbing_interval_sec: 60
+lease_timeout_sec: 300
+lease_cleanup_interval_sec: 15
+
+disk_usage_limit_pct: 90.0
+placement_policy: "free_space"
+max_concurrent_replications: 4
+monitor_interval_sec: 5
+
+database_url: "postgresql+asyncpg://dcomp:dcomp@postgres:5432/dcomp_drive"
+controller_url: "http://controller:8000"
