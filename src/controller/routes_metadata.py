@@ -397,8 +397,20 @@ async def allocate_file(
                 detail=f"Índices de blocos devem ser contíguos a partir de 0 (esperado {expected_idx}, recebido {blk.block_index}).",
             )
 
-    total_blocks_bytes = sum(b.size_bytes for b in sorted_req_blocks)
-    if sorted_req_blocks and total_blocks_bytes != request.size_bytes:
+    # size_bytes do arquivo representa texto claro; blocos representam bytes de rede.
+    # AESGCM.encrypt acrescenta uma tag de autenticação de 16 bytes por bloco.
+    for blk in sorted_req_blocks:
+        if request.is_encrypted:
+            try:
+                nonce = bytes.fromhex(blk.encryption_nonce or "")
+            except ValueError:
+                nonce = b""
+            if len(nonce) != 12 or len(blk.encryption_nonce or "") != 24 or blk.size_bytes < 16:
+                raise HTTPException(status_code=400, detail="Bloco AES-GCM exige nonce hexadecimal de 12 bytes e tag de 16 bytes.")
+        elif blk.encryption_nonce is not None:
+            raise HTTPException(status_code=400, detail="Bloco não cifrado não deve conter nonce.")
+    total_blocks_bytes = sum(b.size_bytes - (16 if request.is_encrypted else 0) for b in sorted_req_blocks)
+    if total_blocks_bytes != request.size_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Soma dos tamanhos dos blocos ({total_blocks_bytes}) difere de size_bytes ({request.size_bytes}).",
