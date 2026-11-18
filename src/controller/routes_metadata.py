@@ -324,8 +324,14 @@ def build_file_metadata_response(
                     )
                 )
 
-            # Prioriza nós ALIVE antes de DRAINING
-            replicas_resp.sort(key=lambda r: (0 if r.node_status == NodeStatus.ALIVE else 1, r.node_id))
+            # Prioriza réplicas VERIFIED e nós ALIVE antes de DRAINING
+            replicas_resp.sort(
+                key=lambda r: (
+                    0 if r.status == ReplicaStatus.VERIFIED else 1,
+                    0 if r.node_status == NodeStatus.ALIVE else 1,
+                    r.node_id,
+                )
+            )
 
             blocks_resp.append(
                 BlockMetadataResponse(

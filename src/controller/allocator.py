@@ -4,6 +4,9 @@ Garante:
 - Regra de não repetição: nunca duas réplicas do mesmo bloco no mesmo disco, nó ou máquina.
 - Gerenciamento de espaço: discos com uso >= disk_usage_limit_pct ou sem espaço livre suficiente
   não recebem novas réplicas.
+- Balanceamento multicritério: escolhe o disco mais livre dentro de cada máquina e ordena
+  as máquinas por espaço livre (ou menor taxa de uso / aleatório conforme política),
+  atualizando o espaço projetado a cada bloco alocado.
 - Tratamento de cluster com menos máquinas vivas que N conforme allow_under_replicated_writes.
 """
 
@@ -46,12 +49,25 @@ class CandidateDisk:
             return 100.0
         return (self.projected_used_bytes / self.total_bytes) * 100.0
 
+    def can_fit(self, block_size_bytes: int, usage_limit_pct: float) -> bool:
+        """Verifica se o disco comporta `block_size_bytes` respeitando o limite percentual."""
+        if self.total_bytes <= 0:
+            return False
+        if self.free_bytes < block_size_bytes:
+            return False
+        if self.usage_pct >= usage_limit_pct:
+            return False
+        projected_after = ((self.projected_used_bytes + block_size_bytes) / self.total_bytes) * 100.0
+        if block_size_bytes > 0 and projected_after > usage_limit_pct:
+            return False
+        return True
+
 
 async def get_eligible_disks(
     db: AsyncSession,
     settings: Settings | None = None,
 ) -> list[CandidateDisk]:
-    """Busca todos os discos ativos pertencentes a nós ALIVE."""
+    """Busca todos os discos ativos pertencentes a nós ALIVE abaixo do limite de uso."""
     cfg = settings or get_settings()
     stmt = (
         select(NodeDisk)
@@ -61,6 +77,7 @@ async def get_eligible_disks(
             StorageNode.status == NodeStatus.ALIVE.value,
             NodeDisk.is_active.is_(True),
         )
+        .order_by(NodeDisk.node_id.asc(), NodeDisk.disk_id.asc())
     )
     result = await db.execute(stmt)
     disks = result.scalars().all()
@@ -94,8 +111,11 @@ def select_targets_for_block(
 
     Respeita:
     - Não repetir `disk_id`, `node_id` nem `machine_id`.
-    - Espaço livre >= `block_size_bytes` e uso projetado < `disk_usage_limit_pct`.
+    - Espaço livre >= `block_size_bytes` e uso projetado dentro de `disk_usage_limit_pct`.
     """
+    if replication_target < 1:
+        raise ValueError("replication_target deve ser pelo menos 1.")
+
     cfg = settings or get_settings()
     excl_nodes = set(excluded_node_ids or set())
     excl_machines = set(excluded_machine_ids or set())
@@ -108,24 +128,33 @@ def select_targets_for_block(
         if c.disk_id not in excl_disks
         and c.node_id not in excl_nodes
         and c.machine_id not in excl_machines
-        and c.free_bytes >= block_size_bytes
-        and c.usage_pct < cfg.disk_usage_limit_pct
+        and c.can_fit(block_size_bytes, cfg.disk_usage_limit_pct)
     ]
 
-    # Agrupa por machine_id, escolhendo o melhor disco de cada máquina (maior espaço livre)
+    # Agrupa por machine_id, escolhendo o melhor disco de cada máquina
+    # Critério: maior espaço livre absoluto; desempate por menor percentual de uso e disk_id
     best_per_machine: dict[str, CandidateDisk] = {}
     for c in valid:
         current = best_per_machine.get(c.machine_id)
-        if current is None or c.free_bytes > current.free_bytes:
+        if current is None or (c.free_bytes, -c.usage_pct, current.disk_id > c.disk_id) > (
+            current.free_bytes,
+            -current.usage_pct,
+            False,
+        ):
             best_per_machine[c.machine_id] = c
 
     machine_choices = list(best_per_machine.values())
 
-    if cfg.placement_policy == "random":
+    policy = (cfg.placement_policy or "free_space").lower()
+    if policy == "random":
         random.shuffle(machine_choices)
+    elif policy == "low_utilization":
+        machine_choices.sort(key=lambda c: (c.usage_pct, -c.free_bytes, c.node_id, c.disk_id))
     else:
-        # Política padrão: ordena por maior espaço livre disponível (free_space)
-        machine_choices.sort(key=lambda c: (c.free_bytes, -c.usage_pct), reverse=True)
+        # Política padrão (free_space): ordena por maior espaço livre disponível
+        machine_choices.sort(
+            key=lambda c: (-c.free_bytes, c.usage_pct, c.node_id, c.disk_id)
+        )
 
     available_count = len(machine_choices)
     if available_count == 0:
@@ -159,3 +188,4 @@ def select_targets_for_block(
         )
 
     return targets, warning
+
