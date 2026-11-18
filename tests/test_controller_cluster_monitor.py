@@ -513,3 +513,20 @@ async def test_planned_drain_migration_and_node_reconciliation_on_return(
     assert reg_node5["reconciled_blocks"] == 0
     assert set(reg_node5["obsolete_blocks"]["node-5:disk-a"]) == {block_id, phantom_id}
 
+
+@pytest.mark.asyncio
+async def test_drive_web_ui_and_monitor_endpoint(client: AsyncClient) -> None:
+    """Verifica que a interface web estilo Google Drive e o gatilho de monitoramento respondem corretamente."""
+    for path in ("/", "/drive"):
+        res = await client.get(path)
+        assert res.status_code == 200
+        assert "DComp Drive" in res.text
+        assert "Meu Drive" in res.text
+
+    cycle_res = await client.post("/ui/api/monitor-cycle")
+    assert cycle_res.status_code == 200
+    data = cycle_res.json()
+    assert "scheduled_replications" in data
+    assert "completed_replications" in data
+
+

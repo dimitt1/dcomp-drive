@@ -13,6 +13,7 @@ from src.controller.database import close_db, init_db
 from src.controller.monitor import cluster_monitor_loop, lease_cleanup_loop
 from src.controller.routes_cluster import router as cluster_router
 from src.controller.routes_metadata import router as metadata_router
+from src.controller.web_ui import router as web_ui_router
 
 logger = get_logger("controller.main")
 
@@ -49,6 +50,7 @@ app = FastAPI(
 
 app.include_router(metadata_router)
 app.include_router(cluster_router)
+app.include_router(web_ui_router)
 
 
 @app.get("/health", tags=["Health"])
