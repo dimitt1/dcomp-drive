@@ -9,16 +9,15 @@ O projeto inspira-se nas arquiteturas do **HDFS**, **Google File System (GFS)**,
 ## Sumário
 
 1. [Arquitetura e Papéis](#1-arquitetura-e-papéis)
-2. [Requisitos Atendidos (Parte 1)](#2-requisitos-atendidos-parte-1)
-3. [Decisões de Projeto (Consistência, Concorrência e Criptografia)](#3-decisões-de-projeto-consistência-concorrência-e-criptografia)
-4. [Pré-requisitos e Instalação](#4-pré-requisitos-e-instalação)
-5. [Subindo o Cluster com Docker Compose (1 Controlador + 5 Nós)](#5-subindo-o-cluster-com-docker-compose-1-controlador--5-nós)
-6. [Interface Web (Bônus RF2) e Endpoints de Observabilidade](#6-interface-web-bônus-rf2-e-endpoints-de-observabilidade)
-7. [Guia Completo da CLI (Exemplos de todos os comandos)](#7-guia-completo-da-cli-exemplos-de-todos-os-comandos)
-8. [Roteiro Prático de Demonstração (Tolerância a Falhas e Corrupção)](#8-roteiro-prático-de-demonstração-tolerância-a-falhas-e-corrupção)
-9. [Configurações do Sistema (`config.yaml` e Variáveis de Ambiente)](#9-configurações-do-sistema-configyaml-e-variáveis-de-ambiente)
-10. [Executando a Suíte de Testes Automatizados](#10-executando-a-suíte-de-testes-automatizados)
-11. [Estrutura do Repositório](#11-estrutura-do-repositório)
+2. [Decisões de Projeto (Consistência, Concorrência e Criptografia)](#2-decisões-de-projeto-consistência-concorrência-e-criptografia)
+3. [Pré-requisitos e Instalação](#3-pré-requisitos-e-instalação)
+4. [Subindo o Cluster com Docker Compose (1 Controlador + 5 Nós)](#4-subindo-o-cluster-com-docker-compose-1-controlador--5-nós)
+5. [Interface Web e Endpoints de Observabilidade](#5-interface-web-e-endpoints-de-observabilidade)
+6. [Guia Completo da CLI (Exemplos de todos os comandos)](#6-guia-completo-da-cli-exemplos-de-todos-os-comandos)
+7. [Roteiro Prático de Demonstração (Tolerância a Falhas e Corrupção)](#7-roteiro-prático-de-demonstração-tolerância-a-falhas-e-corrupção)
+8. [Configurações do Sistema (`config.yaml` e Variáveis de Ambiente)](#8-configurações-do-sistema-configyaml-e-variáveis-de-ambiente)
+9. [Executando a Suíte de Testes Automatizados](#9-executando-a-suíte-de-testes-automatizados)
+10. [Estrutura do Repositório](#10-estrutura-do-repositório)
 
 ---
 
@@ -53,43 +52,26 @@ flowchart TB
 
 | Papel | Componente | Responsabilidades Principais |
 | :--- | :--- | :--- |
-| **Controlador + Nó de Metadados** | `src/controller/` | Processos unificados no mesmo serviço FastAPI (`:8000`). Mantém a árvore de diretórios e o mapeamento `arquivo → blocos → réplicas` persistidos no PostgreSQL (RF10); recebe registro ativo e reconcilia blocos de nós que retornam (RF6); monitora *heartbeats* (`ALIVE` → `SUSPECT` → `DEAD`); seleciona destinos respeitando espaço livre, limite de 90% e regra de não repetição (RF3, RF7); gerencia *leases* de escrita (RF8) e coordena a fila priorizada de re-replicação (RF5). |
-| **Nó de Armazenamento (*Storage Node*)** | `src/storage_node/` | Serviços independentes (`:8001` a `:8005`), cada um gerenciando múltiplos discos locais (`disk-a` e `disk-b`). Recebem e servem blocos em streaming binário; validam `SHA-256` na escrita e antes de cada leitura; persistem atomicamente `<block_id>.blk` e `<block_id>.sha256` com `fsync`; executam *scrubbing* periódico em background (RF4); enviam *heartbeats* com telemetria de disco e copiam blocos diretamente para outros nós quando ordenados pelo Controlador. |
-| **Cliente (CLI)** | `src/client/` | Interface de linha de comando (`python -m src.client`). Divide arquivos em *chunks* configuráveis (padrão `4 MiB`), cifra opcionalmente cada bloco com `AES-256-GCM` no cliente (RF9), calcula hashes `SHA-256` do bloco e do arquivo completo e transfere blocos diretamente para/dos Nós de Armazenamento com *fallback* transparente e reporte automático de réplicas corrompidas. |
+| **Controlador + Nó de Metadados** | `src/controller/` | Processos unificados no mesmo serviço FastAPI (`:8000`). Mantém a árvore de diretórios e o mapeamento `arquivo → blocos → réplicas` persistidos no PostgreSQL; recebe registro ativo e reconcilia blocos de nós que retornam; monitora *heartbeats* (`ALIVE` → `SUSPECT` → `DEAD`); seleciona destinos respeitando espaço livre, limite de 90% e regra de não repetição; gerencia *leases* de escrita e coordena a fila priorizada de re-replicação. |
+| **Nó de Armazenamento (*Storage Node*)** | `src/storage_node/` | Serviços independentes (`:8001` a `:8005`), cada um gerenciando múltiplos discos locais (`disk-a` e `disk-b`). Recebem e servem blocos em streaming binário; validam `SHA-256` na escrita e antes de cada leitura; persistem atomicamente `<block_id>.blk` e `<block_id>.sha256` com `fsync`; executam *scrubbing* periódico em background; enviam *heartbeats* com telemetria de disco e copiam blocos diretamente para outros nós quando ordenados pelo Controlador. |
+| **Cliente (CLI)** | `src/client/` | Interface de linha de comando (`python -m src.client`). Divide arquivos em *chunks* configuráveis (padrão `4 MiB`), cifra opcionalmente cada bloco com `AES-256-GCM` no cliente, calcula hashes `SHA-256` do bloco e do arquivo completo e transfere blocos diretamente para/dos Nós de Armazenamento com *fallback* transparente e reporte automático de réplicas corrompidas. |
 
 ---
 
-## 2. Requisitos Atendidos (Parte 1)
-
-- **RF1 — Operações sobre arquivos e diretórios:** `put`, `get`, `rm` (simples e recursivo), `mv` (renomear/mover arquivos ou subárvores inteiras), `ls`, `mkdir -p`, `stat` (tamanho, datas, hash `SHA-256`, fator $N$, localização de cada bloco/réplica e estado `HEALTHY`, `SUB_REPLICATED`, `RECOVERING`, `WRITING`, `CORRUPTED`).
-- **RF2 — Interface de uso:** CLI completa via `Typer`/`Rich` com suporte a saída `--json`, API REST documentada via OpenAPI (`/docs`) e **Interface Web estilo Google Drive** integrada ao Controlador (`http://localhost:8000/drive`).
-- **RF3 — Replicação e Regra de Não Repetição:** Fator $N$ configurável globalmente (`replication_factor: 3`) ou por arquivo (`--replicas N`). Nunca aloca duas réplicas do mesmo bloco no mesmo disco (`disk_id`), no mesmo nó (`node_id`) ou na mesma máquina física (`machine_id`), com restrições reforçadas também por *constraints* relacionais no PostgreSQL (`PRIMARY KEY (block_id, disk_id)` e `UNIQUE (block_id, node_id)`). Se houver menos máquinas vivas que $N$, aceita gravação como `SUB_REPLICATED` com aviso explícito ou rejeita com `HTTP 503` conforme `allow_under_replicated_writes`.
-- **RF4 — Integridade por Hash (`SHA-256`) e Scrubbing:** Hash calculado no cliente para cada bloco e para o arquivo completo. Verificado: **(a)** ao final da gravação em cada réplica (publicação atômica `.blk` + `.sha256`); **(b)** em toda leitura (no nó antes de transmitir e no cliente ao receber); **(c)** pela rotina periódica de *scrubbing* em segundo plano nos nós. Réplicas corrompidas são reportadas via `POST /blocks/report-corruption`, descartadas, apagadas fisicamente e substituídas a partir de uma réplica íntegra.
-- **RF5 — Detecção de Falhas e Re-replicação Priorizada:** Monitoramento por *heartbeat* (`5s`) com transição em duas fases (`SUSPECT` após `10s`, `DEAD` após `15s`). Quando um nó é declarado `DEAD`, os arquivos afetados passam para `SUB_REPLICATED`/`RECOVERING` e a fila de re-replicação restaura o fator $N$ priorizando blocos com **menor número de réplicas vivas** (1 réplica viva antes de 2) e limitando a concorrência (`max_concurrent_replications: 4`).
-- **RF6 — Descoberta Automática e Reconciliação:** Novos nós registram-se ativamente no boot (`POST /nodes/register`) sem reiniciar o cluster. Nós que retornam após falha enviam seu inventário verificado (`existing_blocks`): réplicas ainda necessárias são reconciliadas como `VERIFIED`, enquanto blocos de arquivos deletados ou já re-replicados em $N$ outras máquinas são retornados em `obsolete_blocks` e removidos fisicamente pelo nó.
-- **RF7 — Gerenciamento de Espaço e *Drain*:** Escolha de destinos baseada no espaço livre projetado (`free_space`), bloqueando novas alocações em discos com ocupação $\ge 90\%$ (`disk_usage_limit_pct`). Suporta esvaziamento planejado de nó (`drain`), migrando suas réplicas para outros nós vivos e apagando os arquivos físicos de origem.
-- **RF8 — Concorrência:** Semântica de **Lease de Escrita + Visibilidade Atômica**. Durante `WRITING`, leituras (`for_read=true`) e escritas/remoções concorrentes no mesmo caminho recebem `HTTP 409 Conflict`, impedindo leituras de arquivos parcialmente escritos. Um loop em background (`lease_cleanup_loop`) limpa *leases* expirados e remove blocos órfãos.
-- **RF9 — Criptografia (`AES-256-GCM`):** Opcional por configuração (`encryption_enabled`) ou flag de CLI (`--encrypt` / `--no-encrypt`).
-- **RF10 — Persistência e Recuperação de Metadados:** Estado integralmente persistido em **PostgreSQL 16** com volume dedicado (`postgres_data`), sobrevivendo a reinicializações do Controlador sem perda da árvore de diretórios ou do mapa de blocos.
-- **RF11 — Visibilidade do Estado:** Comando `cluster-status`, painel Web e endpoints `/cluster/status` e `/metrics`.
-- **RF12 — Logs Estruturados:** Todos os componentes emitem logs JSON estruturados em linha única (`timestamp`, `level`, `component`, `event`, `block_id`, `entry_id`, `node_id`, etc.).
-
----
-
-## 3. Decisões de Projeto (Consistência, Concorrência e Criptografia)
+## 2. Decisões de Projeto (Consistência, Concorrência e Criptografia)
 
 1. **Modelo de Consistência e Quórum de Escrita ($W \le N$):**
    - No fluxo de escrita (`put`), o cliente recebe $N$ destinos por bloco e envia os dados em paralelo. Assim que pelo menos $W$ réplicas (`write_quorum`, padrão `2`) confirmam a gravação e a verificação do `SHA-256`, o cliente executa `POST /files/commit`.
    - Caso todas as $N$ réplicas confirmem, o arquivo nasce `HEALTHY`. Caso apenas $W < N$ confirmem (por exemplo, um nó lento ou indisponível), o arquivo é confirmado imediatamente como `SUB_REPLICATED` e o monitor do Controlador completa as $N - W$ cópias restantes em segundo plano.
    - Em relação ao **Teorema CAP**, o plano de metadados privilegia consistência forte (CP via transações ACID no PostgreSQL e *leases* exclusivos), enquanto o plano de dados adota escrita por quórum ($W$) com convergência assíncrona para o fator $N$, equilibrando baixa latência de confirmação com alta disponibilidade de leitura (tolerando até $N - 1$ falhas simultâneas).
-2. **Criptografia no Cliente e Hash sobre o Conteúdo de Rede (RF4, RF9):**
+2. **Criptografia no Cliente e Hash sobre o Conteúdo de Rede:**
    - A cifra `AES-256-GCM` ocorre exclusivamente no **Cliente**. A chave simétrica de 256 bits (`ENCRYPTION_KEY`, 64 caracteres hexadecimais) fica restrita ao ambiente do cliente (variável de ambiente ou `.env` local) e **nunca** trafega pela rede nem é armazenada no Controlador ou nos Nós de Armazenamento.
    - Cada bloco cifrado utiliza um `nonce` aleatório de 12 bytes (24 hex chars) armazenado nos metadados do bloco (`encryption_nonce`).
    - O `block_hash` (`SHA-256`) é calculado sobre os **bytes que trafegam na rede** (o texto cifrado + tag de autenticação GCM de 16 bytes quando a criptografia está ativa), permitindo que os Nós de Armazenamento verifiquem a integridade na escrita, na leitura e no *scrubbing* sem conhecer a chave secreta. Já o `file_hash` nos metadados registra o `SHA-256` do arquivo completo em texto claro para validação final após a decifragem no cliente.
 
 ---
 
-## 4. Pré-requisitos e Instalação
+## 3. Pré-requisitos e Instalação
 
 - **Docker** (24.0+) e **Docker Compose** (v2) — para subir o cluster completo em contêineres.
 - **Python 3.11+** — caso deseje executar a CLI ou a suíte de testes diretamente na máquina hospedeira.
@@ -112,7 +94,7 @@ export ENCRYPTION_KEY=$(openssl rand -hex 32)
 
 ---
 
-## 5. Subindo o Cluster com Docker Compose (1 Controlador + 5 Nós)
+## 4. Subindo o Cluster com Docker Compose (1 Controlador + 5 Nós)
 
 O arquivo [docker-compose.yml](./docker-compose.yml) sobe automaticamente:
 - `postgres` (`dcomp-postgres`): PostgreSQL 16 (exposto no host em `localhost:5433` para não conflitar com instalações locais na porta `5432`).
@@ -144,20 +126,20 @@ docker compose down -v
 
 ---
 
-## 6. Interface Web (Bônus RF2) e Endpoints de Observabilidade
+## 5. Interface Web e Endpoints de Observabilidade
 
 Com o cluster em execução, acesse no navegador:
 
 - **Interface Web (DComp Drive UI):** `http://localhost:8000/` ou `http://localhost:8000/drive`
   - Permite criar pastas, fazer upload de arquivos (com seleção de fator de replicação $N$ e criptografia `AES-256-GCM`), baixar arquivos com verificação de integridade, renomear/mover, excluir, filtrar por estado (`HEALTHY`, `SUB_REPLICATED`, `RECOVERING`, `CORRUPTED`, `ENCRYPTED`), inspecionar o mapa de blocos/réplicas de cada arquivo e gerenciar os nós do cluster (incluindo botão de *Drain* e disparo manual do ciclo do monitor).
 - **Documentação Interativa da API (Swagger / OpenAPI):** `http://localhost:8000/docs`
-- **Estado do Cluster (JSON — RF11):** `http://localhost:8000/cluster/status`
+- **Estado do Cluster (JSON):** `http://localhost:8000/cluster/status`
 - **Métricas de Observabilidade (JSON):** `http://localhost:8000/metrics`
 - **Healthcheck do Controlador:** `http://localhost:8000/health`
 
 ---
 
-## 7. Guia Completo da CLI (Exemplos de todos os comandos)
+## 6. Guia Completo da CLI (Exemplos de todos os comandos)
 
 A CLI pode ser executada **de dentro do contêiner do controlador** (`docker compose exec controller python -m src.client ...`) ou **diretamente da sua máquina host** (`python -m src.client ...`).
 
@@ -176,21 +158,21 @@ A CLI pode ser executada **de dentro do contêiner do controlador** (`docker com
 
 Abaixo estão exemplos de uso de todos os comandos (executados via `docker compose exec` para praticidade):
 
-### 7.1. Consultar estado do cluster e dos discos (`cluster-status`)
+### 6.1. Consultar estado do cluster e dos discos (`cluster-status`)
 Exibe todos os nós (`ALIVE`, `SUSPECT`, `DEAD`, `DRAINING`), capacidade total/usada/livre de cada disco, re-replicações ativas e contagem de arquivos por estado:
 
 ```bash
 docker compose exec controller python -m src.client cluster-status
 ```
 
-### 7.2. Criar diretórios (`mkdir`)
+### 6.2. Criar diretórios (`mkdir`)
 Cria diretórios na árvore de metadados (cria diretórios pais automaticamente por padrão com `--parents` / `-p`):
 
 ```bash
 docker compose exec controller python -m src.client mkdir /projetos/2026/relatorios
 ```
 
-### 7.3. Enviar arquivos (`put`) — Texto claro, replicação customizada e Criptografia AES-256-GCM
+### 6.3. Enviar arquivos (`put`) — Texto claro, replicação customizada e Criptografia AES-256-GCM
 ```bash
 # Enviar um arquivo usando o fator de replicação padrão (N=3)
 docker compose exec controller python -m src.client put /app/config.yaml /projetos/2026/config_backup.yaml
@@ -198,25 +180,25 @@ docker compose exec controller python -m src.client put /app/config.yaml /projet
 # Enviar especificando fator de replicação N=4
 docker compose exec controller python -m src.client put /app/requirements.txt /projetos/2026/reqs.txt --replicas 4
 
-# Enviar com criptografia autenticada AES-256-GCM no cliente (RF9)
+# Enviar com criptografia autenticada AES-256-GCM no cliente
 docker compose exec -e ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   controller python -m src.client put /app/config.yaml /projetos/2026/segredo.yaml --encrypt
 ```
 
-### 7.4. Listar diretórios (`ls`)
+### 6.4. Listar diretórios (`ls`)
 ```bash
 docker compose exec controller python -m src.client ls /
 docker compose exec controller python -m src.client ls /projetos/2026
 ```
 
-### 7.5. Inspecionar metadados, hashes e localização das réplicas (`stat`)
+### 6.5. Inspecionar metadados, hashes e localização das réplicas (`stat`)
 Mostra o estado do arquivo (`HEALTHY`, `SUB_REPLICATED`, `RECOVERING`, `CORRUPTED`), tamanho original, `SHA-256` completo, status de criptografia e a tabela detalhada de cada bloco com seus nós e discos:
 
 ```bash
 docker compose exec controller python -m src.client stat /projetos/2026/config_backup.yaml
 ```
 
-### 7.6. Baixar arquivos com validação `SHA-256` (`get`)
+### 6.6. Baixar arquivos com validação `SHA-256` (`get`)
 Baixa os blocos em paralelo das réplicas disponíveis, valida o `SHA-256` de cada bloco (fazendo *fallback* automático para outra réplica se detectar falha ou corrupção), decifra se necessário e valida o `SHA-256` do arquivo completo:
 
 ```bash
@@ -228,7 +210,7 @@ docker compose exec -e ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789
   controller python -m src.client get /projetos/2026/segredo.yaml /tmp/segredo_recuperado.yaml
 ```
 
-### 7.7. Renomear ou mover arquivos e diretórios (`mv`)
+### 6.7. Renomear ou mover arquivos e diretórios (`mv`)
 ```bash
 # Renomear/mover um arquivo
 docker compose exec controller python -m src.client mv /projetos/2026/reqs.txt /projetos/2026/relatorios/requirements_final.txt
@@ -237,7 +219,7 @@ docker compose exec controller python -m src.client mv /projetos/2026/reqs.txt /
 docker compose exec controller python -m src.client mv /projetos/2026 /projetos/2027
 ```
 
-### 7.8. Remover arquivos e diretórios (`rm`)
+### 6.8. Remover arquivos e diretórios (`rm`)
 Remove os metadados do banco e dispara a exclusão física assíncrona dos arquivos `.blk` e `.sha256` nos Nós de Armazenamento:
 
 ```bash
@@ -248,7 +230,7 @@ docker compose exec controller python -m src.client rm /projetos/2027/relatorios
 docker compose exec controller python -m src.client rm /projetos --recursive
 ```
 
-### 7.9. Esvaziamento planejado de um nó (`drain`)
+### 6.9. Esvaziamento planejado de um nó (`drain`)
 Marca um nó como `DRAINING` para que não receba novas alocações e migra todas as suas réplicas verificadas para outros nós vivos:
 
 ```bash
@@ -259,9 +241,9 @@ docker compose exec controller python -m src.client drain node-5
 
 ---
 
-## 8. Roteiro Prático de Demonstração (Tolerância a Falhas e Corrupção)
+## 7. Roteiro Prático de Demonstração (Tolerância a Falhas e Corrupção)
 
-Abaixo está o passo a passo para demonstrar os 4 cenários exigidos no **Entregável 5** (gravação com replicação, leitura, queda de nó com recuperação automática e detecção/recuperação de bloco corrompido):
+Abaixo está o passo a passo para demonstrar os 4 cenários principais (gravação com replicação, leitura, queda de nó com recuperação automática e detecção/recuperação de bloco corrompido):
 
 ### Passo 1 — Gravação com Replicação ($N = 3$) e Leitura
 ```bash
@@ -308,45 +290,45 @@ docker compose exec controller python -m src.client stat /demo.yaml
 
 ---
 
-## 9. Configurações do Sistema (`config.yaml` e Variáveis de Ambiente)
+## 8. Configurações do Sistema (`config.yaml` e Variáveis de Ambiente)
 
 Todas as configurações ficam centralizadas em [config.yaml](./config.yaml) e podem ser sobrescritas por variáveis de ambiente (em maiúsculas) sem recompilar ou alterar o código:
 
 | Parâmetro (`config.yaml`) | Variável de Ambiente | Padrão | Descrição |
 | :--- | :--- | :--- | :--- |
-| `encryption_enabled` | `ENCRYPTION_ENABLED` | `false` | Habilita cifra `AES-256-GCM` por padrão no cliente (RF9). |
+| `encryption_enabled` | `ENCRYPTION_ENABLED` | `false` | Habilita cifra `AES-256-GCM` por padrão no cliente. |
 | `encryption_algorithm` | `ENCRYPTION_ALGORITHM` | `"AES-256-GCM"` | Algoritmo de criptografia autenticada. |
 | — *(exclusivo de env)* | `ENCRYPTION_KEY` | `None` | Chave simétrica de 256 bits (64 caracteres hexadecimais) restrita ao cliente. |
-| `replication_factor` | `REPLICATION_FACTOR` | `3` | Nível de replicação padrão $N$ (RF3). |
-| `chunk_size_mb` | `CHUNK_SIZE_MB` | `4` | Tamanho de cada bloco (*chunk*) em MiB (RF4). |
+| `replication_factor` | `REPLICATION_FACTOR` | `3` | Nível de replicação padrão $N$. |
+| `chunk_size_mb` | `CHUNK_SIZE_MB` | `4` | Tamanho de cada bloco (*chunk*) em MiB. |
 | `write_quorum` | `WRITE_QUORUM` | `2` | Quórum de escrita $W$ exigido antes do `commit`. |
 | `allow_under_replicated_writes` | `ALLOW_UNDER_REPLICATED_WRITES` | `true` | Aceita ou rejeita escritas quando há menos máquinas vivas que $N$. |
-| `hash_algorithm` | `HASH_ALGORITHM` | `"sha256"` | Algoritmo de hash para integridade de blocos e arquivos (RF4). |
-| `heartbeat_interval_sec` | `HEARTBEAT_INTERVAL_SEC` | `5` | Intervalo de envio de *heartbeats* pelos Storage Nodes (RF5). |
+| `hash_algorithm` | `HASH_ALGORITHM` | `"sha256"` | Algoritmo de hash para integridade de blocos e arquivos. |
+| `heartbeat_interval_sec` | `HEARTBEAT_INTERVAL_SEC` | `5` | Intervalo de envio de *heartbeats* pelos Storage Nodes. |
 | `suspect_timeout_sec` | `SUSPECT_TIMEOUT_SEC` | `10` | Tempo sem *heartbeat* para marcar um nó como `SUSPECT`. |
 | `heartbeat_timeout_sec` | `HEARTBEAT_TIMEOUT_SEC` | `15` | Tempo sem *heartbeat* para declarar um nó `DEAD` e iniciar re-replicação. |
-| `scrubbing_interval_sec` | `SCRUBBING_INTERVAL_SEC` | `60` | Intervalo da verificação periódica de integridade em disco (RF4). |
-| `lease_timeout_sec` | `LEASE_TIMEOUT_SEC` | `300` | Tempo de expiração do *lease* de escrita concorrente (RF8). |
+| `scrubbing_interval_sec` | `SCRUBBING_INTERVAL_SEC` | `60` | Intervalo da verificação periódica de integridade em disco. |
+| `lease_timeout_sec` | `LEASE_TIMEOUT_SEC` | `300` | Tempo de expiração do *lease* de escrita concorrente. |
 | `lease_cleanup_interval_sec` | `LEASE_CLEANUP_INTERVAL_SEC` | `15` | Frequência de limpeza de *leases* expirados. |
-| `disk_usage_limit_pct` | `DISK_USAGE_LIMIT_PCT` | `90.0` | Percentual máximo de uso de disco para receber novas réplicas (RF7). |
+| `disk_usage_limit_pct` | `DISK_USAGE_LIMIT_PCT` | `90.0` | Percentual máximo de uso de disco para receber novas réplicas. |
 | `placement_policy` | `PLACEMENT_POLICY` | `"free_space"` | Política de posicionamento (`free_space`, `low_utilization`, `random`). |
-| `max_concurrent_replications` | `MAX_CONCURRENT_REPLICATIONS` | `4` | Limite global de cópias de re-replicação simultâneas (RF5). |
+| `max_concurrent_replications` | `MAX_CONCURRENT_REPLICATIONS` | `4` | Limite global de cópias de re-replicação simultâneas. |
 | `monitor_interval_sec` | `MONITOR_INTERVAL_SEC` | `5` | Intervalo do ciclo do monitor de falhas e fila de re-replicação. |
-| `database_url` | `DATABASE_URL` | `postgresql+asyncpg://...` | URL de conexão assíncrona com o PostgreSQL (RF10). |
+| `database_url` | `DATABASE_URL` | `postgresql+asyncpg://...` | URL de conexão assíncrona com o PostgreSQL. |
 | `controller_url` | `CONTROLLER_URL` | `http://controller:8000` | URL base do Controlador. |
 
 ---
 
-## 10. Executando a Suíte de Testes Automatizados
+## 9. Executando a Suíte de Testes Automatizados
 
 O repositório conta com **70 testes automatizados** (`pytest` + `pytest-asyncio`) cobrindo chunking, criptografia, CLI, armazenamento atômico em disco, *scrubbing*, metadados, *leases* de concorrência, alocador, detecção de falhas `SUSPECT`/`DEAD`, fila priorizada de re-replicação, *drain*, reconciliação e integração completa cliente-controlador-nós:
 
-### 10.1. Testes unitários que não dependem do PostgreSQL (Chunker, CLI e Storage Node)
+### 9.1. Testes unitários que não dependem do PostgreSQL (Chunker, CLI e Storage Node)
 ```bash
 .venv/bin/pytest tests/test_client_chunker.py tests/test_client_cli.py tests/test_storage_node.py -v
 ```
 
-### 10.2. Suíte completa (com o container do PostgreSQL rodando na porta `5433`)
+### 9.2. Suíte completa (com o container do PostgreSQL rodando na porta `5433`)
 ```bash
 # Suba apenas o banco PostgreSQL (caso o cluster ainda não esteja ativo)
 docker compose up -d postgres
@@ -360,7 +342,7 @@ TEST_DATABASE_URL="postgresql+asyncpg://dcomp:dcomp@localhost:5433/dcomp_drive" 
 
 ---
 
-## 11. Estrutura do Repositório
+## 10. Estrutura do Repositório
 
 ```text
 dcomp-drive/
@@ -378,7 +360,7 @@ dcomp-drive/
 ├── src/
 │   ├── common/
 │   │   ├── config.py                        # Carregador Pydantic Settings + YAML
-│   │   ├── logger.py                        # Logger JSON estruturado (RF12)
+│   │   ├── logger.py                        # Logger JSON estruturado
 │   │   └── schemas.py                       # Contratos e modelos Pydantic REST
 │   ├── controller/
 │   │   ├── main.py                          # Aplicação FastAPI do Controlador + Lifespan

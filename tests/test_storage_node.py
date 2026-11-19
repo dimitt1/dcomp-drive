@@ -84,7 +84,7 @@ async def test_blocks_persist_and_bad_put_cannot_replace_verified_block(disks, m
             assert conflicting.status_code == 409
 
             restarted = DiskManager(disks.mounts)
-            monkeypatch.setattr(app.state, "agent", make_agent(restarted, net))
+            app.state.agent = make_agent(restarted, net)
             response = await client.get(url, params={"disk_id": disk_id})
             assert response.status_code == 200
             assert response.headers["X-Block-SHA256"] == sha256(payload)
